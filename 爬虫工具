@@ -1,0 +1,274 @@
+// MARK: - 模型层 (Model)
+struct Proxy: Identifiable, Codable, Equatable {
+    let id = UUID()
+    let ip: String
+    let port: String
+    let protocol: String
+    var speed: Double = Double.infinity
+    
+    init(ip: String, port: String, protocol: String) {
+        self.ip = ip.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.port = port.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.protocol = protocol.lowercased()
+    }
+    
+    var isInvalid: Bool {
+        !isValidIP || !isValidPort
+    }
+    
+    private var isValidIP: Bool {
+        let pattern = #"^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$"#
+        return NSPredicate(format: "SELF MATCHES %@", pattern).evaluate(with: ip)
+    }
+    
+    private var isValidPort: Bool {
+        guard let portInt = Int(port) else { return false }
+        return portInt >= 1024 && portInt <= 65535
+    }
+}
+
+// MARK: - 服务层 (Service)
+enum ProxyError: Error, LocalizedError {
+    case invalidHTML
+    case networkFailure
+    case invalidProxy(String)
+    case missingDependency(String)
+    
+    var errorDescription: String? {
+        switch self {
+        case .invalidHTML: return "无效的HTML响应"
+        case .networkFailure: return "网络连接失败"
+        case .invalidProxy(let msg): return "无效代理：\(msg)"
+        case .missingDependency(let msg): return "缺少依赖：\(msg)"
+    }
+    }
+}
+
+class ProxyCrawler {
+    enum ProxySource: String, CaseIterable {
+        case kuaidaili = "https://www.kuaidaili.com/free/inha/1/"
+        case sslproxies = "https://www.sslproxies.org/"
+        case freeProxyList = "https://free-proxy-list.net/"
+        
+        var parser: (String) -> [Proxy] {
+            switch self {
+            case .kuaidaili: return parseKuaidaili
+            case .sslproxies: return parseSSLProxies
+            case .freeProxyList: return parseFreeProxyList
+            }
+        }
+    }
+    
+    private let maxRetries = 3
+    private let retryDelay: TimeInterval = 2
+    
+    func crawlAllSources() async throws -> [Proxy] {
+        var proxies = [Proxy]()
+        for source in ProxySource.allCases {
+            do {
+                let html = try await fetchHTML(from: source.rawValue, retries: maxRetries)
+                let parsed = source.parser(html)
+                proxies.append(contentsOf: parsed.filter { !$0.isInvalid })
+            } catch {
+                print("爬取\(source.rawValue)失败: \(error)")
+            }
+        }
+        return proxies
+    }
+    
+    private func fetchHTML(from url: String, retries: Int) async throws -> String {
+        for attempt in 1...retries {
+            do {
+                let (data, response) = try await URLSession.shared.data(from: URL(string: url)!)
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                    throw ProxyError.networkFailure
+                }
+                guard let html = String(data: data, encoding: .utf8) else {
+                    throw ProxyError.invalidHTML
+                }
+                return html
+            } catch {
+                if attempt < retries {
+                    try await Task.sleep(nanoseconds: UInt64(retryDelay * Double(NSEC_PER_SEC)))
+                } else {
+                    throw error
+                }
+            }
+        }
+    }
+    
+    static func parseKuaidaili(_ html: String) -> [Proxy] {
+        guard let soup = try? SwiftSoup.parse(html) else { return [] }
+        return soup.select("table#freelist tr").dropFirst().compactMap { tr in
+            let ip = try? tr.select("td[data-title=IP]").text()
+            let port = try? tr.select("td[data-title=PORT]").text()
+            guard let ip = ip, let port = port else { return nil }
+            return Proxy(ip: ip, port: port, protocol: "http")
+        }
+    }
+    
+    static func parseSSLProxies(_ html: String) -> [Proxy] {
+        guard let soup = try? SwiftSoup.parse(html) else { return [] }
+        return soup.select("table.table-striped tr").dropFirst().compactMap { tr in
+            let ip = try? tr.select("td").first()?.text()
+            let port = try? tr.select("td").dropFirst().first()?.text()
+            guard let ip = ip, let port = port else { return nil }
+            return Proxy(ip: ip, port: port, protocol: "https")
+        }
+    }
+    
+    static func parseFreeProxyList(_ html: String) -> [Proxy] {
+        guard let soup = try? SwiftSoup.parse(html) else { return [] }
+        return soup.select("#proxylisttable tr").dropFirst().compactMap { tr in
+            let ip = try? tr.select("td").first()?.text()
+            let port = try? tr.select("td").dropFirst().first()?.text()
+            guard let ip = ip, let port = port else { return nil }
+            return Proxy(ip: ip, port: port, protocol: "http")
+        }
+    }
+}
+
+class ProxyValidator {
+    private let timeout: TimeInterval = 8
+    
+    func validateProxies(proxies: [Proxy]) async throws -> [Proxy] {
+        var validProxies = [Proxy]()
+        let semaphore = DispatchSemaphore(value: 5) // 并发数限制
+        
+        for proxy in proxies {
+            try await withCheckedThrowingContinuation { continuation in
+                semaphore.wait()
+                Task {
+                    defer { semaphore.signal() }
+                    do {
+                        let speed = try await withTimeout(timeout) {
+                            try await testProxySpeed(for: proxy)
+                        }
+                        var validProxy = proxy
+                        validProxy.speed = speed
+                        validProxies.append(validProxy)
+                        continuation.resume()
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
+        return validProxies.sorted(by: { $0.speed < $1.speed })
+    }
+    
+    private func testProxySpeed(for proxy: Proxy) async throws -> Double {
+        let config = URLSessionConfiguration.default
+        config.httpProxy = [
+            "host": proxy.ip,
+            "port": UInt16(proxy.port) ?? 80,
+            "type": .http
+        ]
+        
+        let start = Date.timeIntervalSinceReferenceDate
+        _ = try await URLSession(configuration: config).data(from: URL(string: "https://www.baidu.com")!)
+        return Date.timeIntervalSinceReferenceDate - start
+    }
+}
+
+// MARK: - 视图模型层 (ViewModel)
+class ProxyViewModel: ObservableObject {
+    @Published var proxies: [Proxy] = []
+    @Published var errorMessage: String? = nil
+    @Published var isLoading = false
+    
+    private let crawler = ProxyCrawler()
+    private let validator = ProxyValidator()
+    
+    func fetchProxies() async {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        
+        do {
+            let rawProxies = try await crawler.crawlAllSources()
+            let validProxies = try await validator.validateProxies(proxies: rawProxies)
+            proxies = validProxies
+        } catch let error as ProxyError {
+            errorMessage = error.errorDescription
+        } catch {
+            errorMessage = "发生未知错误：\(error.localizedDescription)"
+        } finally {
+            isLoading = false
+        }
+    }
+}
+
+// MARK: - 视图层 (View)
+import SwiftUI
+
+struct GlobalProxyTool: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
+
+struct ContentView: View {
+    @StateObject private var viewModel = ProxyViewModel()
+    
+    var body: some View {
+        NavigationStack {
+            VStack {
+                if viewModel.isLoading {
+                    ProgressView("加载代理中...")
+                        .progressViewStyle(CircularProgressViewStyle())
+                } else if viewModel.proxies.isEmpty {
+                    Text("未找到有效代理")
+                        .foregroundColor(.secondary)
+                } else {
+                    List(viewModel.proxies) { proxy in
+                        HStack {
+                            Text("\(proxy.ip):\(proxy.port)")
+                                .font(.subheadline)
+                            
+                            Text(proxy.protocol.uppercased())
+                                .padding(4)
+                                .background(
+                                    Color(getProtocolColor(proxy.protocol))
+                                        .opacity(0.2)
+                                )
+                                .cornerRadius(4)
+                                .font(.caption)
+                            
+                            Text("速度: \(proxy.speed, specifier: "%.2f秒")")
+                                .foregroundColor(proxy.speed < 2 ? .green : proxy.speed < 5 ? .orange : .red)
+                        }
+                    }
+                }
+                
+                Button("刷新代理") {
+                    Task { await viewModel.fetchProxies() }
+                }
+                .padding()
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+            .navigationTitle("全球代理工具")
+            .onAppear {
+                Task { await viewModel.fetchProxies() }
+            }
+            .alert("错误", isPresented: $viewModel.errorMessage.notNil) {
+                Button("确定", role: .cancel) { }
+            } message: {
+                Text(viewModel.errorMessage ?? "未知错误")
+            }
+        }
+    }
+    
+    private func getProtocolColor(_ protocol: String) -> Color {
+        switch protocol {
+        case "http": return .blue
+        case "https": return .green
+        case "socks5": return .purple
+        default: return .gray
+        }
+    }
+}
