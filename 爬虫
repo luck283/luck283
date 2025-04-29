@@ -1,0 +1,223 @@
+import os
+import asyncio
+import redis
+import logging
+import base64
+import requests
+from typing import List, Dict, Optional
+from pydantic import BaseSettings
+from bs4 import BeautifulSoup
+from flask import Flask, jsonify, request
+from prometheus_client import Gauge, make_wsgi_app
+from werkzeug.middleware.dispatcher import DispatcherMiddleware
+from aiohttp import ClientSession, TCPConnector
+from aiohttp_socks import Socks5Connector, ProxyConnector
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+# --------------------- 配置模块 ---------------------
+class Settings(BaseSettings):
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    API_KEY: str = "your-secret-key"
+    HOST: str = "0.0.0.0"
+    PORT: int = 5010
+    REFRESH_INTERVAL: int = 1800
+    MAX_LATENCY: float = 0.15  # 150ms
+    CONCURRENCY_LIMIT: int = 100
+    ENABLE_PAYMENT_PROXY: bool = False
+    ENABLE_SOCKS5: bool = True
+    SUBSCRIPTION_URLS: List[str] = []
+    PAYMENT_PROXY_API: str = ""
+    PAYMENT_AUTH: tuple = ("", "")
+    class Config: env_file = ".env"
+settings = Settings()
+
+# --------------------- 日志与监控 ---------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+PROXY_POOL_SIZE = Gauge("proxy_pool_size", "代理池大小", labels=["type", "protocol"])
+
+# --------------------- 工具函数 ---------------------
+def fetch_html(url: str) -> str:
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/114.0.0.0"}
+        return requests.get(url, headers=headers, timeout=10).text
+    except: return ""
+
+# --------------------- 代理获取器 ---------------------
+class ProxyFetcher:
+    PUBLIC_SOURCES = {
+        "http": [
+            "https://proxy-list.org/english/index.php",
+            "https://www.us-proxy.org/",
+            "https://free-proxy-list.net/",
+        ],
+        "socks5": [
+            "https://www.socks-proxy.net/",
+            "https://hidemy.name/en/proxy-list/?type=socks",
+        ]
+    }
+
+    @staticmethod
+    def fetch_public(protocol: str) -> List[str]:
+        proxies = []
+        for url in ProxyFetcher.PUBLIC_SOURCES.get(protocol, []):
+            html = fetch_html(url)
+            if protocol == "socks5":
+                proxies.extend(ProxyFetcher.parse_socks(html))
+            else:
+                proxies.extend(ProxyFetcher.parse_http(html))
+        return list(set(proxies))
+    
+    @staticmethod
+    def parse_http(html: str) -> List[str]:
+        return [
+            f"http://{tr.select_one('td:nth-child(1)').text.strip()}:{tr.select_one('td:nth-child(2)').text.strip()}"
+            for tr in BeautifulSoup(html, "html.parser").select("table tr")[1:] if tr.select_one("td")
+        ]
+    
+    @staticmethod
+    def parse_socks(html: str) -> List[str]:
+        return [
+            f"socks5://{tr.select_one('td:nth-child(1)').text.strip()}:{tr.select_one('td:nth-child(2)').text.strip()}"
+            for tr in BeautifulSoup(html, "html.parser").select("tr")[1:] if tr.select_one("td")
+        ]
+    
+    @staticmethod
+    def fetch_subscription() -> List[str]:
+        proxies = []
+        for url in settings.SUBSCRIPTION_URLS:
+            try:
+                if "clash" in url:
+                    proxies.extend(ProxyFetcher.parse_clash(url))
+                elif "surge" in url:
+                    proxies.extend(ProxyFetcher.parse_surge(url))
+            except: pass
+        return proxies
+    
+    @staticmethod
+    def parse_clash(url: str) -> List[str]:
+        data = requests.get(url).json()
+        return [f"{node['type']}://{node['server']}:{node['port']}" for node in data["proxies"]]
+    
+    @staticmethod
+    def parse_surge(url: str) -> List[str]:
+        content = base64.b64decode(requests.get(url).content).decode()
+        return [f"socks5://{line.split(',')[1]}:{line.split(',')[2]}" for line in content.splitlines() if "Proxy" in line]
+    
+    @staticmethod
+    def fetch_payment() -> List[str]:
+        if not settings.ENABLE_PAYMENT_PROXY: return []
+        try:
+            resp = requests.get(settings.PAYMENT_PROXY_API, auth=settings.PAYMENT_AUTH)
+            return [f"{p['type']}://{p['ip']}:{p['port']}" for p in resp.json()["results"]]
+        except: return []
+
+# --------------------- 代理验证器 ---------------------
+class ProxyValidator:
+    _session = None
+    _semaphore = asyncio.Semaphore(settings.CONCURRENCY_LIMIT)
+    
+    @classmethod
+    async def _get_session(cls, proxy: str):
+        protocol = proxy.split("://")[0]
+        if protocol == "socks5":
+            return ClientSession(connector=Socks5Connector.from_url(proxy))
+        else:
+            return ClientSession(proxy=proxy)
+    
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @classmethod
+    async def validate(cls, proxy: str, is_overseas: bool) -> Optional[Dict[str, float]]:
+        async with cls._semaphore:
+            test_url = "https://www.google.com" if is_overseas else "https://www.baidu.com"
+            try:
+                async with await cls._get_session(proxy) as session:
+                    start = asyncio.get_running_loop().time()
+                    async with session.get(test_url, timeout=5) as resp:
+                        latency = asyncio.get_running_loop().time() - start
+                        if resp.status == 200 and latency < settings.MAX_LATENCY:
+                            return {"proxy": proxy, "latency": latency}
+            except: return None
+
+    @classmethod
+    async def batch_validate(cls, proxies: List[str], is_overseas: bool) -> List[Dict[str, float]]:
+        tasks = [cls.validate(p, is_overseas) for p in proxies]
+        results = await asyncio.gather(*tasks)
+        return [r for r in results if r]
+
+# --------------------- 代理存储 ---------------------
+class RedisStorage:
+    def __init__(self):
+        self.redis = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=settings.REDIS_DB)
+        self.keys = {
+            "domestic": {"http": "domestic_http", "socks5": "domestic_socks5"},
+            "overseas": {"http": "overseas_http", "socks5": "overseas_socks5"}
+        }
+    
+    def add(self, proxies: List[Dict[str, float]], is_overseas: bool, protocol: str):
+        key = self.keys["overseas" if is_overseas else "domestic"][protocol]
+        data = {p["proxy"]: p["latency"] for p in proxies}
+        if data:
+            self.redis.zadd(key, data)
+            PROXY_POOL_SIZE.labels(type="overseas" if is_overseas else "domestic", protocol=protocol).set(len(data))
+    
+    def get(self, is_overseas: bool, protocol: str) -> Optional[str]:
+        key = self.keys["overseas" if is_overseas else "domestic"][protocol]
+        return self.redis.zrange(key, 0, 0, withscores=True)
+
+# --------------------- Flask API ---------------------
+app = Flask(__name__)
+storage = RedisStorage()
+app.wsgi_app = DispatcherMiddleware(app.wsgi_app, {"/metrics": make_wsgi_app()})
+
+@app.before_request
+def auth():
+    if request.headers.get("X-API-KEY") != settings.API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+
+@app.route("/get/<protocol>")
+def get_proxy(protocol: str):
+    overseas = request.args.get("overseas", "false") == "true"
+    proxy_data = storage.get(overseas, protocol)
+    return jsonify({"proxy": proxy_data[0][0]}) if proxy_data else (jsonify({"error": "No proxy"}), 404)
+
+@app.route("/status")
+def status():
+    return jsonify({
+        "domestic_http": storage.redis.zcard("domestic_http"),
+        "domestic_socks5": storage.redis.zcard("domestic_socks5"),
+        "overseas_http": storage.redis.zcard("overseas_http"),
+        "overseas_socks5": storage.redis.zcard("overseas_socks5"),
+        "max_latency": f"{settings.MAX_LATENCY*1000}ms"
+    })
+
+# --------------------- 主循环 ---------------------
+async def refresh(protocol: str, is_overseas: bool):
+    proxies = []
+    proxies.extend(ProxyFetcher.fetch_public(protocol))
+    proxies.extend(ProxyFetcher.fetch_subscription())
+    if settings.ENABLE_PAYMENT_PROXY:
+        proxies.extend(ProxyFetcher.fetch_payment())
+    
+    valid = await ProxyValidator.batch_validate(list(set(proxies)), is_overseas)
+    storage.add(valid, is_overseas, protocol)
+
+async def main_loop():
+    while True:
+        await asyncio.gather(
+            refresh("http", False),
+            refresh("socks5", False),
+            refresh("http", True),
+            refresh("socks5", True)
+        )
+        await asyncio.sleep(settings.REFRESH_INTERVAL)
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    try:
+        loop.create_task(main_loop())
+        app.run(host=settings.HOST, port=settings.PORT, debug=False)
+    except KeyboardInterrupt:
+        logger.info("Proxy pool shutdown")
