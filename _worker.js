@@ -2,22 +2,16 @@
 // 部署完成后在网址后面加上这个，获取订阅器默认节点，/auto
 
 let mytoken= https://raw.githubusercontent.com/aiboboxx/v2rayfree/main/v2/auto
-https://bulinkbulink.com/freefq/free/master/v2/auto
-
-SS:
-https://raw.githubusercontent.com/umelabs/node.umelabs.dev/master/Subscribe/SS.md/auto
-
-SSR:
-https://raw.githubusercontent.com/umelabs/node.umelabs.dev/master/Subscribe/SSR.md/auto
-
-V2Ray:
-https://raw.githubusercontent.com/umelabs/node.umelabs.dev/master/Subscribe/v2ray.md/auto
+//bulinkbulink.com/freefq/free/master/v2/auto
+//raw.githubusercontent.com/umelabs/node.umelabs.dev/master/Subscribe/SS.md/auto
+//raw.githubusercontent.com/umelabs/node.umelabs.dev/master/Subscribe/SSR.md/auto
+//raw.githubusercontent.com/umelabs/node.umelabs.dev/master/Subscribe/v2ray.md/auto
 
 
 // 设置优选地址，不带端口号默认987
 let addresses = [
     //'engage.cloudflareclient.com:2408#WAPR官方直连',
-    //'162.159.195.128:987#WARP',
+    //'43.138.141.226:987#WARP',
 ];
 
 // 设置优选地址api接口
