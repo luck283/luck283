@@ -11,7 +11,7 @@ mytoken=/https://raw.githubusercontent.com/umelabs/node.umelabs.dev/master/Subsc
 // 设置优选地址，不带端口号默认987
 let addresses = [
     //'engage.cloudflareclient.com:2408#WAPR官方直连',
-    //'43.138.141.226:22#WARP',
+    //'162.159.195.128:987#WARP',
 ];
 
 // 设置优选地址api接口
