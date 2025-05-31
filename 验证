@@ -1,183 +1,47 @@
-{
-  "WFWorkflowActions": [
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.geturl",
-      "WFWorkflowActionParameters": {
-        "WFURL": "https://www.freereceivesms.com/countrys/",
-        "WFHTTPMethod": "GET"
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.findtext",
-      "WFWorkflowActionParameters": {
-        "WFText": {
-          "Value": "网页内容"
-        },
-        "WFSearchPattern": "(中国|美国|加拿大|英国|法国|德国|俄罗斯|日本|印度|韩国|澳大利亚|巴西|墨西哥|阿根廷|南非|埃及|沙特阿拉伯|土耳其|新加坡|马来西亚|泰国|越南|印尼|菲律宾|荷兰|意大利|西班牙|波兰|瑞典|瑞士|奥地利|比利时|丹麦|芬兰|希腊|葡萄牙|匈牙利|捷克|罗马尼亚|乌克兰|哈萨克斯坦|以色列|阿联酋|挪威|新西兰|哥伦比亚|智利|秘鲁|孟加拉国|巴基斯坦|尼日利亚|肯尼亚|摩洛哥|香港|澳门|台湾)",
-        "WFCaseSensitive": false
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.removeduplicates",
-      "WFWorkflowActionParameters": {
-        "WFInput": {
-          "Value": "原始国家列表"
-        }
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.sort",
-      "WFWorkflowActionParameters": {
-        "WFInput": {
-          "Value": "唯一国家列表"
-        },
-        "WFSortOrder": "Ascending"
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.dictionary",
-      "WFWorkflowActionParameters": {
-        "WFItems": [
-          {
-            "Key": "中国",
-            "Value": "CN"
-          },
-          {
-            "Key": "美国",
-            "Value": "US"
-          },
-          {
-            "Key": "英国",
-            "Value": "GB"
-          },
-          {
-            "Key": "法国",
-            "Value": "FR"
-          },
-          {
-            "Key": "德国",
-            "Value": "DE"
-          }
-          // 添加更多国家与 ISO 缩写映射...
-        ]
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.choosefromlist",
-      "WFWorkflowActionParameters": {
-        "WFItems": {
-          "Value": "有序国家列表"
-        },
-        "WFPrompt": "选择目标国家/地区"
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.getdictionaryvalue",
-      "WFWorkflowActionParameters": {
-        "WFDictionary": {
-          "Value": "国家缩写词典"
-        },
-        "WFKey": {
-          "Value": "选中国家名称"
-        }
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.geturl",
-      "WFWorkflowActionParameters": {
-        "WFURL": "https://api.example.com/numbers?country={{国家缩写}}",
-        "WFHTTPMethod": "GET"
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.getdictionaryvalue",
-      "WFWorkflowActionParameters": {
-        "WFDictionary": {
-          "Value": "号码原始数据"
-        },
-        "WFKey": {
-          "Value": "numbers"
-        }
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.getdictionaryvalue",
-      "WFWorkflowActionParameters": {
-        "WFDictionary": {
-          "Value": "号码原始数据"
-        },
-        "WFKey": {
-          "Value": "links"
-        }
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.list",
-      "WFWorkflowActionParameters": {
-        "WFInput": {
-          "Value": [
-            {
-              "number": "{{当前号码}}",
-              "link": "{{当前链接}}",
-              "country": "{{国家缩写}}"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.repeat",
-      "WFWorkflowActionParameters": {
-        "WFRepeatItems": {
-          "Value": "号码链接列表"
-        }
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.notification",
-      "WFWorkflowActionParameters": {
-        "WFNotificationTitle": "验证中",
-        "WFNotificationBody": "正在发送短信到 {{当前号码}}"
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.wait",
-      "WFWorkflowActionParameters": {
-        "WFWaitTime": 180
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.filter",
-      "WFWorkflowActionParameters": {
-        "WFItems": {
-          "Value": "选中号码数组"
-        },
-        "WFPredicate": {
-          "Value": "验证状态 == True"
-        }
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.text",
-      "WFWorkflowActionParameters": {
-        "WFText": "所有验证完成！有效号码：{{有效号码列表}}"
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.savefile",
-      "WFWorkflowActionParameters": {
-        "WFFileName": "validation_results.txt",
-        "WFContent": {
-          "Value": "{{有效号码列表}}"
-        }
-      }
-    }
-  ],
-  "WFWorkflowClientRelease": "2.0",
-  "WFWorkflowClientVersion": "720",
-  "WFWorkflowIcon": {
-    "GlyphNumber": 597,
-    "Color": "blue"
-  },
-  "WFWorkflowImportQuestions": []
-}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" >"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+   <key>items</key>
+   <array>
+       <dict>
+           <key>assets</key>
+           <array>
+               <dict>
+                   <key>kind</key>
+                   <string>software-package</string>
+                   <key>url</key>
+                   <string>这里是ipa下载地址</string>
+               </dict>
+               <dict>
+                   <key>kind</key>
+                   <string>full-size-image</string>
+                   <key>needs-shine</key>
+                   <true/>
+                   <key>url</key>
+                   <string>这里是下载时图片的地址</string>
+               </dict>
+               <dict>
+                   <key>kind</key>
+                   <string>display-image</string>
+                   <key>needs-shine</key>
+                   <true/>
+                   <key>url</key>
+                   <string>这里是下载时图片的地址</string>
+               </dict>
+           </array>
+           <key>metadata</key>
+           <dict>
+               <key>title</key>
+               <string>安装时提示安装的App名称</string>
+               <key>bundle-version</key>
+               <string>这里是AppVersion</string>
+               <key>kind</key>
+               <string>software</string>
+               <key>bundle-identifier</key>
+               <string>这里是AppBundleId</string>
+           </dict>
+       </dict>
+   </array>
+</dict>
+</plist>
