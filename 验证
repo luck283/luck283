@@ -33,7 +33,7 @@
            <key>metadata</key>
            <dict>
                <key>title</key>
-               <string>安装时提示安装的App名称</string>
+               <string>Ybox</string>
                <key>bundle-version</key>
                <string>这里是AppVersion</string>
                <key>kind</key>
