@@ -19,7 +19,7 @@
                    <key>needs-shine</key>
                    <true/>
                    <key>url</key>
-                   <string>这里是下载时图片的地址</string>
+                   <string>https://github.com/luck283/luck283/blob/d7c6f93fd29f7ecb70ce4f19b0ad90a172253873/Ybox_1.0.9.ipa</string>
                </dict>
                <dict>
                    <key>kind</key>
@@ -27,7 +27,7 @@
                    <key>needs-shine</key>
                    <true/>
                    <key>url</key>
-                   <string>这里是下载时图片的地址</string>
+                   <string>https://github.com/luck283/luck283/blob/d7c6f93fd29f7ecb70ce4f19b0ad90a172253873/Ybox_1.0.9.ipa</string>
                </dict>
            </array>
            <key>metadata</key>
@@ -35,7 +35,7 @@
                <key>title</key>
                <string>Ybox</string>
                <key>bundle-version</key>
-               <string>这里是AppVersion</string>
+               <string1.0.9</string>
                <key>kind</key>
                <string>software</string>
                <key>bundle-identifier</key>
